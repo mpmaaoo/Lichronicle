@@ -1,4 +1,7 @@
 using UnityEngine;
+#if UNITY_EDITOR
+using UnityEditor;
+#endif
 
 /// <summary>
 /// 進 Play 後跑格子投影。若這個場景的 FezMapRoot 裡有編輯器放的方塊，就用那些；
@@ -7,45 +10,30 @@ using UnityEngine;
 [DisallowMultipleComponent]
 public sealed class FezGridTestRig : MonoBehaviour
 {
+    private const string DefaultPlayerPrefabPath = "Assets/_Project/Prefabs/Player/GridTestPlayer.prefab";
+
     [SerializeField] private Transform authoredRoot;
+    [SerializeField] private FezGridTestPlayer playerPrefab;
+    [SerializeField] private Transform spawnPoint;
 
     private void Start()
     {
+        EnsurePlayerPrefab();
+
         var mapObject = new GameObject("GridMap");
         var map = mapObject.AddComponent<FezGridMap>();
         var root = ResolveAuthoredRoot();
         var imported = map.ImportPlacedBlocks(root);
-        Vector3 spawn;
-        if (imported > 0)
-            spawn = SpawnOnLowestBlock(map);
-        else
-        {
+        if (imported <= 0)
             BuildDemo(map);
-            spawn = new Vector3(0.5f, 1.08f, 0.5f);
-        }
+
+        ResolveSpawn(map, out var spawn, out var spawnRot);
 
         var shellObject = new GameObject("GridShell");
         var shell = shellObject.AddComponent<FezGridShell>();
 
-        var playerObject = new GameObject("GridTestPlayer");
-        playerObject.transform.position = spawn;
-        var controller = playerObject.AddComponent<CharacterController>();
-        controller.height = 1.6f;
-        controller.radius = 0.28f;
-        controller.center = new Vector3(0f, 0.8f, 0f);
-        controller.skinWidth = 0.05f;
-        var player = playerObject.AddComponent<FezGridTestPlayer>();
+        var player = SpawnPlayer(spawn, spawnRot);
         player.Bind(map, shell);
-
-        var body = GameObject.CreatePrimitive(PrimitiveType.Capsule);
-        body.name = "Body";
-        body.transform.SetParent(playerObject.transform, false);
-        body.transform.localPosition = new Vector3(0f, 0.8f, 0f);
-        Destroy(body.GetComponent<Collider>());
-        var renderer = body.GetComponent<Renderer>();
-        var shader = Shader.Find("Unlit/Color");
-        if (renderer != null && shader != null)
-            renderer.sharedMaterial = new Material(shader) { color = new Color(0.95f, 0.95f, 0.9f) };
 
         var camera = Camera.main;
         if (camera == null)
@@ -61,7 +49,7 @@ public sealed class FezGridTestRig : MonoBehaviour
         camera.orthographicSize = 6.5f;
         camera.nearClipPlane = 0.1f;
         camera.farClipPlane = 80f;
-        camera.transform.SetParent(playerObject.transform, false);
+        camera.transform.SetParent(player.transform, false);
         camera.transform.localPosition = new Vector3(0f, 2.2f, -16f);
         camera.transform.localRotation = Quaternion.identity;
 
@@ -69,6 +57,71 @@ public sealed class FezGridTestRig : MonoBehaviour
         var light = lightObject.AddComponent<Light>();
         light.type = LightType.Directional;
         lightObject.transform.rotation = Quaternion.Euler(50f, -30f, 0f);
+    }
+
+    private void EnsurePlayerPrefab()
+    {
+        if (playerPrefab != null)
+            return;
+
+#if UNITY_EDITOR
+        playerPrefab = AssetDatabase.LoadAssetAtPath<FezGridTestPlayer>(DefaultPlayerPrefabPath);
+#endif
+        if (playerPrefab == null)
+            Debug.LogWarning("[FezGridTestRig] Player Prefab 未指定，將用現場組裝（預製件數值不會生效）。請在 Inspector 指定 GridTestPlayer。");
+    }
+
+    private FezGridTestPlayer SpawnPlayer(Vector3 spawn, Quaternion rotation)
+    {
+        if (playerPrefab != null)
+        {
+            var instance = Instantiate(playerPrefab, spawn, rotation);
+            instance.name = "GridTestPlayer";
+            return instance;
+        }
+
+        // 後備：場景未指定預製件時才現場組裝。
+        var playerObject = new GameObject("GridTestPlayer");
+        playerObject.transform.SetPositionAndRotation(spawn, rotation);
+        var controller = playerObject.AddComponent<CharacterController>();
+        controller.height = 1.6f;
+        controller.radius = 0.28f;
+        controller.center = new Vector3(0f, 0.8f, 0f);
+        controller.skinWidth = 0.05f;
+        var player = playerObject.AddComponent<FezGridTestPlayer>();
+
+        var body = GameObject.CreatePrimitive(PrimitiveType.Capsule);
+        body.name = "Body";
+        body.transform.SetParent(playerObject.transform, false);
+        body.transform.localPosition = new Vector3(0f, 0.8f, 0f);
+        Destroy(body.GetComponent<Collider>());
+        var renderer = body.GetComponent<Renderer>();
+        var shader = Shader.Find("Unlit/Color");
+        if (renderer != null && shader != null)
+            renderer.sharedMaterial = new Material(shader) { color = new Color(0.95f, 0.95f, 0.9f) };
+
+        return player;
+    }
+
+    private void ResolveSpawn(FezGridMap map, out Vector3 position, out Quaternion rotation)
+    {
+        if (spawnPoint != null)
+        {
+            position = spawnPoint.position;
+            rotation = spawnPoint.rotation;
+            return;
+        }
+
+        var found = GameObject.Find("PlayerSpawn");
+        if (found != null && found.scene == gameObject.scene)
+        {
+            position = found.transform.position;
+            rotation = found.transform.rotation;
+            return;
+        }
+
+        position = SpawnOnLowestBlock(map);
+        rotation = Quaternion.identity;
     }
 
     private Transform ResolveAuthoredRoot()
@@ -81,6 +134,17 @@ public sealed class FezGridTestRig : MonoBehaviour
             return found.transform;
 
         return null;
+    }
+
+    private void OnDrawGizmos()
+    {
+        if (spawnPoint == null)
+            return;
+
+        Gizmos.color = new Color(0.2f, 0.85f, 1f, 0.9f);
+        Gizmos.DrawWireSphere(spawnPoint.position + Vector3.up * 0.8f, 0.28f);
+        Gizmos.DrawLine(spawnPoint.position, spawnPoint.position + Vector3.up * 1.6f);
+        Gizmos.DrawRay(spawnPoint.position + Vector3.up * 0.9f, spawnPoint.forward * 0.6f);
     }
 
     private static Vector3 SpawnOnLowestBlock(FezGridMap map)

@@ -1438,7 +1438,7 @@ GameObject:
   - component: {fileID: 4515263327091502221}
   - component: {fileID: 3745428127655239812}
   m_Layer: 11
-  m_Name: Player
+  m_Name: PlayerOld
   m_TagString: Player
   m_Icon: {fileID: 0}
   m_NavMeshLayer: 0
@@ -1852,7 +1852,7 @@ MonoBehaviour:
   m_Lens:
     FieldOfView: 60.000004
     OrthographicSize: 4
-    NearClipPlane: -50
+    NearClipPlane: 0.01
     FarClipPlane: 1000
     Dutch: 0
     ModeOverride: 0

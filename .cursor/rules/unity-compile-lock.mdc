@@ -5,12 +5,12 @@ alwaysApply: true
 
 # Unity 腳本編譯鎖（CS2012）
 
-外部改 `.cs` 時，Unity Bee / `Unity.ILPP.Runner` 常鎖住 `Library/Bee/artifacts/**/Assembly-CSharp.dll`，出現 CS2012。
+外部改 `.cs` 時，Unity Bee / `Unity.ILPP.Runner` 常鎖住 `Library/Bee/artifacts/**/Assembly-CSharp.dll`，出現 CS2012。這與是否手動 Ctrl+R 無必然關係，多半是 ILPP／Bee 鎖檔。
 
 ## 避免
 
 - 同一輪盡量一次改完相關腳本，避免反覆存檔觸發多次重編。
-- 專案已預設「延後腳本自動編譯」：改完後請使用者在 Unity 按 **Ctrl+R**，或選單 **Lichronicle → Tools → 立即重新編譯腳本**。
+- 專案預設維持 Unity **自動重新整理**（不必手動 Ctrl+R）。
 - 不要刪改 `Library/`（解鎖工具除外）。
 - 不要結束正在開此專案的 `Unity.exe`；解鎖時只處理 `Unity.ILPP.Runner`。
 

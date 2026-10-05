@@ -8,9 +8,23 @@ using UnityEngine;
 [RequireComponent(typeof(CharacterController))]
 public sealed class FezGridTestPlayer : MonoBehaviour
 {
-    [SerializeField] private float moveSpeed = 6f;
-    [SerializeField] private float jumpHeight = 4.2f;
+    [Header("移動（沿用 PlayerOld 手感）")]
+    [SerializeField] private float moveSpeed = 5f;
+    [SerializeField] private float jumpHeight = 1.3f;
     [SerializeField] private float gravity = -25f;
+    [SerializeField] private float maxFallSpeed = 10f;
+    [SerializeField] private float coyoteTime = 0.1f;
+    [SerializeField] private float jumpBufferTime = 0.1f;
+    [SerializeField] private float acceleration = 35f;
+    [SerializeField] private float deceleration = 35f;
+    [SerializeField] private float stickDeadzone = 0.25f;
+    [SerializeField] private float downInputThreshold = -0.5f;
+
+    [Header("手把（對齊舊 Ability：L1／R1）")]
+    [SerializeField] private KeyCode rotateLeftPad = KeyCode.JoystickButton4;
+    [SerializeField] private KeyCode rotateRightPad = KeyCode.JoystickButton5;
+
+    [Header("格子投影")]
     [SerializeField] private float rotateDuration = 0.35f;
     [SerializeField] private float floorReach = 0.55f;
 
@@ -21,6 +35,9 @@ public sealed class FezGridTestPlayer : MonoBehaviour
     private const float DepthGlideDuration = 0.1f;
 
     private Vector3 _velocity;
+    private float _currentSpeed;
+    private float _coyoteCounter;
+    private float _jumpBufferCounter;
     private bool _holdingCover;
     private bool _bypassingWall;
     private float _bypassFeetY;
@@ -77,10 +94,10 @@ public sealed class FezGridTestPlayer : MonoBehaviour
             return;
         }
 
-        if (Input.GetKeyDown(KeyCode.Q))
-            BeginRotate(-1f);
-        else if (Input.GetKeyDown(KeyCode.E))
+        if (Input.GetKeyDown(KeyCode.Q) || Input.GetKeyDown(rotateLeftPad))
             BeginRotate(1f);
+        else if (Input.GetKeyDown(KeyCode.E) || Input.GetKeyDown(rotateRightPad))
+            BeginRotate(-1f);
 
         if (_rotating)
             return;
@@ -99,30 +116,67 @@ public sealed class FezGridTestPlayer : MonoBehaviour
         TickDropThrough(axes, support);
 
         var grounded = _cc.isGrounded;
-        if (grounded && _velocity.y < 0f && _dropThroughBlock == null)
-            _velocity.y = -2f;
-
-        var input = Input.GetAxisRaw("Horizontal");
-        if (Mathf.Abs(input) < 0.01f)
-            input = 0f;
-        else
-            input = Mathf.Sign(input);
-
-        var horizontal = transform.right * (input * moveSpeed);
-        var jumpPressed = Input.GetButtonDown("Jump");
-        // 按住 S／下時禁止跳躍，只做下落穿過（沒踩到可穿方塊也不跳）。
-        var holdDrop = Input.GetKey(KeyCode.S) || Input.GetAxisRaw("Vertical") < -0.5f;
-        if (jumpPressed && holdDrop)
+        if (grounded)
         {
-            if (grounded)
-                TryBeginDropThrough(support, axes);
+            _coyoteCounter = coyoteTime;
+            if (_velocity.y < 0f && _dropThroughBlock == null)
+                _velocity.y = -2f;
         }
-        else if (grounded && jumpPressed && _dropThroughBlock == null)
+        else
         {
+            _coyoteCounter -= Time.deltaTime;
+        }
+
+        var input = ApplyAxisDeadzone(Input.GetAxisRaw("Horizontal"), stickDeadzone);
+        var inputMagnitude = Mathf.Clamp01(Mathf.Abs(input));
+        if (inputMagnitude > 0.01f)
+            input = Mathf.Sign(input);
+        else
+            input = 0f;
+
+        var targetSpeed = inputMagnitude * moveSpeed;
+        var accel = inputMagnitude > 0.01f ? acceleration : deceleration;
+        _currentSpeed = Mathf.MoveTowards(_currentSpeed, targetSpeed, accel * Time.deltaTime);
+        var moveDir = inputMagnitude > 0.01f ? transform.right * input : Vector3.zero;
+        var horizontal = moveDir * _currentSpeed;
+
+        var jumpPressed = Input.GetButtonDown("Jump")
+            || Input.GetKeyDown(KeyCode.Space)
+            || Input.GetKeyDown(KeyCode.JoystickButton0)
+            || Input.GetKeyDown(KeyCode.JoystickButton1);
+        // 按住 S／下／搖桿下時禁止跳躍，只做下落穿過。
+        var vertical = ApplyAxisDeadzone(Input.GetAxisRaw("Vertical"), stickDeadzone);
+        var holdDrop = Input.GetKey(KeyCode.S)
+            || Input.GetKey(KeyCode.DownArrow)
+            || vertical <= downInputThreshold;
+        if (jumpPressed)
+        {
+            if (holdDrop && _coyoteCounter > 0f)
+            {
+                _jumpBufferCounter = 0f;
+                TryBeginDropThrough(support, axes);
+            }
+            else if (_dropThroughBlock == null)
+            {
+                _jumpBufferCounter = jumpBufferTime;
+            }
+        }
+        else
+        {
+            _jumpBufferCounter -= Time.deltaTime;
+        }
+
+        if (_jumpBufferCounter > 0f && _coyoteCounter > 0f && _dropThroughBlock == null && !holdDrop)
+        {
+            _jumpBufferCounter = 0f;
+            _coyoteCounter = 0f;
             _velocity.y = Mathf.Sqrt(jumpHeight * -2f * gravity);
         }
 
         _velocity.y += gravity * Time.deltaTime;
+        if (maxFallSpeed > 0f)
+            _velocity.y = Mathf.Max(_velocity.y, -maxFallSpeed);
+
         var motion = horizontal;
         motion.y = _velocity.y;
 
@@ -356,6 +410,14 @@ public sealed class FezGridTestPlayer : MonoBehaviour
         return lateral <= 0.78f;
     }
 
+    private static float ApplyAxisDeadzone(float value, float deadzone)
+    {
+        var dz = Mathf.Clamp01(deadzone);
+        if (Mathf.Abs(value) < dz)
+            return 0f;
+        return value;
+    }
+
     private void BeginRotate(float direction)
     {
         _rotating = true;
@@ -364,6 +426,8 @@ public sealed class FezGridTestPlayer : MonoBehaviour
         var targetY = Mathf.Round((_fromRot.eulerAngles.y + 90f * Mathf.Sign(direction)) / 90f) * 90f;
         _toRot = Quaternion.Euler(0f, targetY, 0f);
         _velocity = Vector3.zero;
+        _currentSpeed = 0f;
+        _jumpBufferCounter = 0f;
     }
 
     private void TickRotation()
@@ -525,7 +589,8 @@ public sealed class FezGridTestPlayer : MonoBehaviour
 
         GUI.Label(new Rect(16f, 16f, 720f, 140f),
             "格子投影測試（不影響 SampleScene）\n" +
-            "A／D 移動，空白跳躍，Q／E 轉 90 度\n" +
+            "A／D／左搖桿移動，空白／A／B 跳躍，Q／E／L1／R1 轉 90 度\n" +
+            "S／下／搖桿下＋跳躍＝下落穿過\n" +
             $"目前深度軸 {depthName}\n" +
             "轉視角後依四角偵測點判定遮擋（綠＝未遮、紅＝被遮）。\n" +
             "一般方塊頂面可踩、側面可繞。S+空白＝下落穿過腳下那塊並繞到淺側。");

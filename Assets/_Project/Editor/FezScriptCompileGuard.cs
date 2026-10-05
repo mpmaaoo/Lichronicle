@@ -6,57 +6,33 @@ using UnityEngine;
 using Debug = UnityEngine.Debug;
 
 /// <summary>
-/// 降低外部改腳本時 CS2012（Assembly-CSharp.dll 被鎖）的機率，並提供一鍵解鎖。
+/// 維持 Unity 自動重新整理（不必手動 Ctrl+R），並提供一鍵解除腳本編譯鎖。
+/// 不呼叫 DisallowAutoRefresh／AllowAutoRefresh，避免 m_DisallowAutoRefresh 断言。
 /// </summary>
 [InitializeOnLoad]
 public static class FezScriptCompileGuard
 {
     private const string PrefDelayRefresh = "Lichronicle.DelayScriptAutoRefresh";
-    private const string PrefHintShown = "Lichronicle.DelayScriptAutoRefresh.HintShown";
 
     static FezScriptCompileGuard()
     {
-        // 預設開啟：改腳本後不要立刻自動重編，改按 Ctrl+R。
-        if (!EditorPrefs.HasKey(PrefDelayRefresh))
-            EditorPrefs.SetBool(PrefDelayRefresh, true);
+        // 清掉舊版「延後編譯」偏好，並確保 Auto Refresh 開啟。
+        if (EditorPrefs.HasKey(PrefDelayRefresh))
+            EditorPrefs.DeleteKey(PrefDelayRefresh);
 
-        EditorApplication.delayCall += ApplyRefreshMode;
-        EditorApplication.delayCall += MaybeShowHint;
+        EditorApplication.delayCall += EnsureAutoRefreshOn;
     }
 
-    [MenuItem("Lichronicle/Tools/延後腳本自動編譯（避免 CS2012）/目前狀態", false, 10)]
-    private static void StatusMenu()
+    [MenuItem("Lichronicle/Tools/開啟自動重新整理（不必 Ctrl+R）", false, 10)]
+    private static void EnableAutoRefreshMenu()
     {
-        var on = IsDelayRefreshOn();
+        EnsureAutoRefreshOn();
+        Debug.Log("[Lichronicle] 已開啟 Unity 自動重新整理。改腳本後會自動編譯，不必按 Ctrl+R。");
         EditorUtility.DisplayDialog(
-            "延後腳本自動編譯",
-            on
-                ? "目前：開啟\n\n外部（Cursor）改完腳本後，到 Unity 按 Ctrl+R（或 Assets → Refresh）才會編譯。\n可減少 Assembly-CSharp.dll 被鎖的 CS2012。"
-                : "目前：關閉\n\nUnity 會一偵測到腳本變動就自動編譯（較容易撞上 CS2012）。",
+            "自動重新整理",
+            "已開啟。\n\n外部改完腳本後，Unity 會自動偵測並編譯，不必再按 Ctrl+R。",
             "OK");
     }
-
-    [MenuItem("Lichronicle/Tools/延後腳本自動編譯（避免 CS2012）/開啟", false, 11)]
-    private static void EnableDelayRefresh()
-    {
-        EditorPrefs.SetBool(PrefDelayRefresh, true);
-        ApplyRefreshMode();
-        Debug.Log("[Lichronicle] 已開啟延後腳本自動編譯。改完腳本後請按 Ctrl+R。");
-    }
-
-    [MenuItem("Lichronicle/Tools/延後腳本自動編譯（避免 CS2012）/開啟", true)]
-    private static bool EnableDelayRefreshValidate() => !IsDelayRefreshOn();
-
-    [MenuItem("Lichronicle/Tools/延後腳本自動編譯（避免 CS2012）/關閉", false, 12)]
-    private static void DisableDelayRefresh()
-    {
-        EditorPrefs.SetBool(PrefDelayRefresh, false);
-        ApplyRefreshMode();
-        Debug.Log("[Lichronicle] 已關閉延後腳本自動編譯。Unity 會自動重編腳本。");
-    }
-
-    [MenuItem("Lichronicle/Tools/延後腳本自動編譯（避免 CS2012）/關閉", true)]
-    private static bool DisableDelayRefreshValidate() => IsDelayRefreshOn();
 
     [MenuItem("Lichronicle/Tools/解除腳本編譯鎖 (CS2012)", false, 30)]
     private static void UnlockCompileLock()
@@ -74,42 +50,13 @@ public static class FezScriptCompileGuard
     [MenuItem("Lichronicle/Tools/立即重新編譯腳本", false, 31)]
     private static void RefreshScriptsNow()
     {
-        AssetDatabase.AllowAutoRefresh();
         AssetDatabase.Refresh();
-        if (IsDelayRefreshOn())
-            AssetDatabase.DisallowAutoRefresh();
-        Debug.Log("[Lichronicle] 已手動 Refresh 腳本。延後模式開啟時也可直接按 Ctrl+R。");
+        Debug.Log("[Lichronicle] 已手動 Refresh 腳本。");
     }
 
-    private static bool IsDelayRefreshOn() => EditorPrefs.GetBool(PrefDelayRefresh, true);
-
-    private static void ApplyRefreshMode()
+    private static void EnsureAutoRefreshOn()
     {
-        if (IsDelayRefreshOn())
-        {
-            AssetDatabase.DisallowAutoRefresh();
-            EditorPrefs.SetBool("kAutoRefresh", false);
-        }
-        else
-        {
-            AssetDatabase.AllowAutoRefresh();
-            EditorPrefs.SetBool("kAutoRefresh", true);
-        }
-
-        Menu.SetChecked("Lichronicle/Tools/延後腳本自動編譯（避免 CS2012）/開啟", IsDelayRefreshOn());
-        Menu.SetChecked("Lichronicle/Tools/延後腳本自動編譯（避免 CS2012）/關閉", !IsDelayRefreshOn());
-    }
-
-    private static void MaybeShowHint()
-    {
-        if (!IsDelayRefreshOn() || EditorPrefs.GetBool(PrefHintShown, false))
-            return;
-
-        EditorPrefs.SetBool(PrefHintShown, true);
-        Debug.Log(
-            "[Lichronicle] 已預設開啟「延後腳本自動編譯」，降低 CS2012 機率。" +
-            "外部改完腳本後請按 Ctrl+R，或選單 Lichronicle → Tools → 立即重新編譯腳本。" +
-            "若仍出現 CS2012：Lichronicle → Tools → 解除腳本編譯鎖。");
+        EditorPrefs.SetBool("kAutoRefresh", true);
     }
 
     private static int KillIlppRunners()
