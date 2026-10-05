@@ -124,6 +124,10 @@ public sealed class FezPlatformViewOcclusion : MonoBehaviour
             if (h.collider != null && IsOwnPlatformCollider(h.collider))
                 continue;
 
+            // 移動／跟隨用隱形箱不算視線遮擋（牆 MoveTrigger、平台 DepthProxy）
+            if (IsNonVisualMoveCollider(h.collider))
+                continue;
+
             return true;
         }
 
@@ -136,5 +140,23 @@ public sealed class FezPlatformViewOcclusion : MonoBehaviour
             return false;
         var t = col.transform;
         return t == platformRoot || t.IsChildOf(platformRoot);
+    }
+
+    /// <summary>
+    /// 跟隨玩家深度的隱形碰撞箱：不應參與「是否看得到平台」的判定。
+    /// </summary>
+    private static bool IsNonVisualMoveCollider(Collider col)
+    {
+        if (col == null)
+            return true;
+
+        if (col.GetComponentInParent<FezBackgroundWallMoveTrigger>() != null)
+            return true;
+
+        // 其他平台的 DepthProxy 同樣不可見；本平台已由 IsOwnPlatformCollider 略過
+        if (col.GetComponentInParent<FezDepthProxyFollower>() != null)
+            return true;
+
+        return false;
     }
 }

@@ -48,6 +48,13 @@ public sealed class FezPlayerDepthSnapper : MonoBehaviour
         if (_cc == null)
             return;
 
+        // 下穿中：禁止吸回平台本體深度，也不做穿模淺解算
+        if (PlayerController.IsDropThroughActiveStatic)
+        {
+            // 下穿時也不要讓 DepthProxy 跟到玩家腳下，否則會再被當成承載面
+            return;
+        }
+
         var viewForward = FezDepthAxis.GetViewForward(depthAxisSource, explicitAxisTransform, explicitCamera);
 
         if (_cc.isGrounded && !IsOcclusionBlocked())

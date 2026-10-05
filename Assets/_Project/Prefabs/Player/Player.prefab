@@ -1587,15 +1587,24 @@ MonoBehaviour:
   maxFallSpeed: 10
   coyoteTime: 0.1
   jumpBufferTime: 0.1
-  dropThroughDuration: 0.15
   downInputThreshold: -0.5
-  addDropThroughDownwardBoost: 1
-  dropThroughDownwardBoost: 2
+  stickDeadzone: 0.25
+  dropThroughShallowCells: 1
+  dropThroughSafetyTimeout: 1.2
+  dropThroughInitialDigCells: 0.25
+  dropThroughFootProbeRadius: 0.28
+  dropThroughFootProbeDistance: 0.45
+  dropThroughDownwardBoost: 3.5
+  dropThroughEscapeSpeed: 4.5
+  dropDepthAxisSource: 0
+  dropExplicitAxisTransform: {fileID: 0}
+  dropExplicitCamera: {fileID: 0}
   acceleration: 35
   deceleration: 35
   movementPlane: {fileID: 545414944623636823}
   collideWithFezPlatformBodies: 1
   fezPlatformLayerName: FezPlatform
+  depthProxyLayerName: DepthProxy
   ignoreBackgroundWallPhysics: 1
   backgroundWallLayerName: BackGroundWall
 --- !u!114 &3812915130685210148

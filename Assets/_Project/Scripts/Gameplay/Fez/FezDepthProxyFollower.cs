@@ -52,6 +52,9 @@ public sealed class FezDepthProxyFollower : MonoBehaviour
 
     private static void SyncStaggeredPhase(float deltaTime, ref int lastFrameGate, bool alignToPlatformBody)
     {
+        if (PlayerController.IsDropThroughActiveStatic)
+            return;
+
         var f = Time.frameCount;
         if (f == lastFrameGate)
             return;
@@ -148,6 +151,9 @@ public sealed class FezDepthProxyFollower : MonoBehaviour
 
     private void Tick(float dt, bool alignToPlatformBody = false)
     {
+        if (PlayerController.IsDropThroughActiveStatic)
+            return;
+
         if (playerRoot == null)
             return;
 

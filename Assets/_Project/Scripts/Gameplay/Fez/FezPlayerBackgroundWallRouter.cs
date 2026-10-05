@@ -68,6 +68,8 @@ public sealed class FezPlayerBackgroundWallRouter : MonoBehaviour
         IsRoutingAroundShallow = false;
         if (!routingEnabled || _cc == null)
             return;
+        if (PlayerController.IsDropThroughActiveStatic)
+            return;
 
         routeProbe?.RefreshTouchingWalls();
 
