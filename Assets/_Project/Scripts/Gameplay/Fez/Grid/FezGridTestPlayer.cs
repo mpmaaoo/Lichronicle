@@ -60,6 +60,9 @@ public sealed class FezGridTestPlayer : MonoBehaviour
     private float _dropThroughRouteDepth;
     private bool _dropThroughHasRoute;
 
+    /// <summary>最後一次穩穩踩過的一般方塊；掉出地圖時拉回這裡。</summary>
+    private FezGridBlock _lastStoodBlock;
+
     private readonly Transform[] _probeMarkers = new Transform[4];
     private readonly Renderer[] _probeRenderers = new Renderer[4];
     private readonly Vector3[] _probeWorld = new Vector3[4];
@@ -74,6 +77,9 @@ public sealed class FezGridTestPlayer : MonoBehaviour
         EnsureProbeMarkers();
         var axes = FezGridProjection.FromYaw(transform.eulerAngles.y);
         ResolveDepth(transform.position, axes, 1.2f, false, true, null, false, 0f);
+        if (FezGridProjection.TryResolveFloor(
+                _map, transform.position, axes, floorReach, 1.6f, false, out var floor, out _))
+            RememberStoodBlock(floor);
     }
 
     private void Awake()
@@ -121,6 +127,7 @@ public sealed class FezGridTestPlayer : MonoBehaviour
             _coyoteCounter = coyoteTime;
             if (_velocity.y < 0f && _dropThroughBlock == null)
                 _velocity.y = -2f;
+            RememberStoodBlock(support);
         }
         else
         {
@@ -203,14 +210,7 @@ public sealed class FezGridTestPlayer : MonoBehaviour
             TickDropThrough(axes, support);
 
             if (transform.position.y < -6f)
-            {
-                _holdingCover = false;
-                _bypassingWall = false;
-                _bypassSupport = null;
-                _gliding = false;
-                EndDropThrough();
-                Teleport(new Vector3(0.5f, 1.08f, 0.5f), axes);
-            }
+                RespawnOnLastStoodBlock(axes);
 
             return;
         }
@@ -318,14 +318,47 @@ public sealed class FezGridTestPlayer : MonoBehaviour
         Teleport(transform.position, axes);
 
         if (transform.position.y < -6f)
+            RespawnOnLastStoodBlock(axes);
+    }
+
+    private void RememberStoodBlock(FezGridBlock support)
+    {
+        if (support == null || !support.Solid)
+            return;
+        if (_dropThroughBlock != null)
+            return;
+        _lastStoodBlock = support;
+    }
+
+    private void RespawnOnLastStoodBlock(FezGridProjection.Axes axes)
+    {
+        _holdingCover = false;
+        _bypassingWall = false;
+        _bypassSupport = null;
+        _gliding = false;
+        _velocity = Vector3.zero;
+        _currentSpeed = 0f;
+        EndDropThrough();
+
+        Vector3 feet;
+        if (_lastStoodBlock != null && _lastStoodBlock.Solid)
         {
-            _holdingCover = false;
-            _bypassingWall = false;
-            _bypassSupport = null;
-            _gliding = false;
-            EndDropThrough();
-            Teleport(new Vector3(0.5f, 1.08f, 0.5f), axes);
+            feet = new Vector3(
+                _lastStoodBlock.Center.x,
+                _lastStoodBlock.TopY + 0.08f,
+                _lastStoodBlock.Center.z);
         }
+        else
+        {
+            feet = new Vector3(0.5f, 1.08f, 0.5f);
+        }
+
+        var safe = FezGridProjection.DepenetrateShallow(_map, feet, axes, 1.6f);
+        _cc.enabled = false;
+        transform.position = safe;
+        _cc.enabled = true;
+
+        ResolveDepth(transform.position, axes, 1.2f, false, true, _lastStoodBlock, false, 0f);
     }
 
     private void TryBeginDropThrough(FezGridBlock support, FezGridProjection.Axes axes)
@@ -541,8 +574,8 @@ public sealed class FezGridTestPlayer : MonoBehaviour
         if (_shell == null)
             return;
 
-        // 繞牆也不再清空碰撞：清空會讓人瞬移嵌進淺側實體地形後卡死。
-        _shell.RebuildForDepth(_map, axes, depth, support);
+        // 平台與邊界牆保留。繞行中只拿掉遮片牆，避免整層清空後嵌進淺側地形。
+        _shell.RebuildForDepth(_map, axes, depth, support, _bypassingWall);
     }
 
     private void ApplyDepthGlide(FezGridProjection.Axes axes)
@@ -587,13 +620,15 @@ public sealed class FezGridTestPlayer : MonoBehaviour
             : axes.depth == Vector3.back ? "-Z"
             : "-X";
 
-        GUI.Label(new Rect(16f, 16f, 720f, 140f),
+        GUI.Label(new Rect(16f, 16f, 720f, 160f),
             "格子投影測試（不影響 SampleScene）\n" +
             "A／D／左搖桿移動，空白／A／B 跳躍，Q／E／L1／R1 轉 90 度\n" +
             "S／下／搖桿下＋跳躍＝下落穿過\n" +
             $"目前深度軸 {depthName}\n" +
             "轉視角後依四角偵測點判定遮擋（綠＝未遮、紅＝被遮）。\n" +
-            "一般方塊頂面可踩、側面可繞。S+空白＝下落穿過腳下那塊並繞到淺側。");
+            "一般方塊頂面可踩、側面可繞。遮片牆平常硬擋，繞行中暫時不碰撞。\n" +
+            "粉紅邊界牆＝看得見才硬擋、看不見可穿。\n" +
+            "S+空白＝下落穿過腳下那塊並繞到淺側。");
     }
 
     private void EnsureProbeMarkers()

@@ -287,7 +287,8 @@ public static class FezGridProjection
 
         foreach (var block in map.Blocks)
         {
-            if (block == null)
+            // 邊界牆不參與「離開遮擋後往淺側撥」；遮片牆仍可當前方遮擋並繞行。
+            if (block == null || block.IsBoundaryWall)
                 continue;
 
             var blockDepth = DepthOf(block.Center, axes);
@@ -355,17 +356,24 @@ public static class FezGridProjection
         if (map == null)
             return false;
 
+        RefreshShallowest(map, axes);
+
         var feetLateral = LateralOf(feet, axes);
         var bodyMin = feet.y + 0.05f;
         var bodyMax = feet.y + Mathf.Max(0.2f, bodyHeight);
 
         foreach (var block in map.Blocks)
         {
-            if (block == null || !block.Solid)
+            if (block == null)
+                continue;
+
+            var isPlatform = block.Solid;
+            var isBoundary = block.IsBoundaryWall;
+            if (!isPlatform && !isBoundary)
                 continue;
 
             // 下落穿過中的那塊不擋身體，才能穿過去並繞行。
-            if (IsIgnoredFloor(block))
+            if (isPlatform && IsIgnoredFloor(block))
                 continue;
 
             var blockDepth = DepthOf(block.Center, axes);
@@ -377,8 +385,8 @@ public static class FezGridProjection
 
             var blockMin = block.Cell.y;
             var blockMax = block.Cell.y + 1f;
-            // 腳踩在頂面上方時不算卡住。
-            if (feet.y >= blockMax - 0.02f)
+            // 平台：腳踩在頂面上方不算卡住。邊界牆頂面不可踩，重疊即擋。
+            if (isPlatform && feet.y >= blockMax - 0.02f)
                 continue;
 
             if (blockMin < bodyMax && blockMax > bodyMin)
@@ -409,6 +417,7 @@ public static class FezGridProjection
 
     /// <summary>
     /// 若已嵌進實體，沿深度往更淺方向推出，直到身體不再重疊。
+    /// 不可越過邊界牆到其更淺側。
     /// </summary>
     public static Vector3 DepenetrateShallow(
         FezGridMap map,
@@ -429,6 +438,11 @@ public static class FezGridProjection
         {
             var probeDepth = depth - pushed;
             var probe = SnapToDepth(feet, probeDepth, axes);
+
+            // 再往淺會撞上邊界牆 → 停住，避免被推到牆的淺側。
+            if (BoundaryWallBlocksAtDepth(map, probe, axes, probeDepth, bodyHeight))
+                break;
+
             if (!BodyBlockedAtDepth(map, probe, axes, probeDepth, bodyHeight))
                 return probe;
         }
@@ -462,6 +476,10 @@ public static class FezGridProjection
         foreach (var block in map.Blocks)
         {
             if (block == null)
+                continue;
+
+            // 邊界牆改由 Shell 硬擋；遮片牆維持深度繞行。
+            if (block.IsBoundaryWall)
                 continue;
 
             // 一般方塊：踩在頂面＝地板，不繞；只繞側面。
@@ -543,11 +561,55 @@ public static class FezGridProjection
         {
             var candidate = preferredRoute - i;
             var probe = SnapToDepth(feet, candidate, axes);
+
+            // 此深度被邊界牆擋住 → 不可再往更淺繞過去。
+            if (BoundaryWallBlocksAtDepth(map, probe, axes, candidate, bodyHeight))
+                return false;
+
             if (!BodyBlockedAtDepth(map, probe, axes, candidate, bodyHeight))
             {
                 route = candidate;
                 return true;
             }
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// 指定深度上身體是否與邊界牆重疊（硬擋，深度繞行不可穿越）。
+    /// </summary>
+    private static bool BoundaryWallBlocksAtDepth(
+        FezGridMap map,
+        Vector3 feet,
+        Axes axes,
+        float depth,
+        float bodyHeight,
+        float radius = 0.32f)
+    {
+        if (map == null)
+            return false;
+
+        var feetLateral = LateralOf(feet, axes);
+        var bodyMin = feet.y + 0.05f;
+        var bodyMax = feet.y + Mathf.Max(0.2f, bodyHeight);
+
+        foreach (var block in map.Blocks)
+        {
+            if (block == null || !block.IsBoundaryWall)
+                continue;
+
+            var blockDepth = DepthOf(block.Center, axes);
+            if (Mathf.Abs(blockDepth - depth) > 0.55f)
+                continue;
+
+            if (Mathf.Abs(feetLateral - LateralOf(block.Center, axes)) > radius)
+                continue;
+
+            var blockMin = block.Cell.y;
+            var blockMax = block.Cell.y + 1f;
+            if (blockMin < bodyMax && blockMax > bodyMin)
+                return true;
         }
 
         return false;
@@ -572,13 +634,21 @@ public static class FezGridProjection
         return blockMin < bodyMax && blockMax > bodyMin;
     }
 
+    /// <summary>
+    /// 重建各側向柱上最淺方塊索引（平台／遮片／邊界牆都算）。
+    /// </summary>
+    public static void RefreshShallowest(FezGridMap map, Axes axes)
+    {
+        IndexShallowest(map, axes);
+    }
+
     private static void IndexShallowest(FezGridMap map, Axes axes)
     {
         Shallowest.Clear();
         if (map == null)
             return;
 
-        // 地形與遮片都算「擋在前面」。遮片本身不能踩，但會讓後面的實體地板算被遮住。
+        // 地形、遮片、邊界牆都算「擋在前面」。遮片／邊界牆本身不能踩，但會讓後面的實體地板算被遮住。
         foreach (var block in map.Blocks)
         {
             if (block == null)
@@ -590,7 +660,10 @@ public static class FezGridProjection
         }
     }
 
-    private static bool IsShallowestOnFace(FezGridBlock block, Axes axes)
+    /// <summary>
+    /// 此格是否為該側向柱上最淺（當前視角看得見的最前格）。呼叫前需 RefreshShallowest／相關查詢已建索引。
+    /// </summary>
+    public static bool IsShallowestOnFace(FezGridBlock block, Axes axes)
     {
         if (block == null)
             return false;

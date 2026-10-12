@@ -4,30 +4,25 @@ using UnityEditor;
 using UnityEngine;
 
 /// <summary>
-/// 簡易 1x1 方塊地圖編輯器：在 Scene 視圖以網格放置／清除平台與背景牆。
+/// 簡易 1x1 方塊地圖編輯器：在 Scene 視圖以網格放置／清除方塊。
+/// 筆刷種類來自 <see cref="FezBlockMapBrushCatalog"/>；新方塊加目錄即可。
 /// </summary>
 public sealed class FezBlockMapEditorWindow : EditorWindow
 {
-    private const string PrefPlatformKey = "Lichronicle.FezBlockMap.PlatformGuid";
-    private const string PrefWallKey = "Lichronicle.FezBlockMap.WallGuid";
     private const string PrefRootKey = "Lichronicle.FezBlockMap.RootId";
     private const string PrefDragKey = "Lichronicle.FezBlockMap.DragPaint";
+    private const string PrefBrushKey = "Lichronicle.FezBlockMap.BrushId";
     private const float GridSize = 1f;
     private const float PaintHoldIntervalSeconds = 0.2f;
-    private const string DefaultPlatformGuid = "5dc2e7616cd0eff46924a320585aa99c";
-    private const string DefaultWallGuid = "de47f2bc00a23f348a62d07093edd238";
 
-    private enum BrushKind
-    {
-        Platform = 0,
-        Wall = 1,
-        Erase = 2
-    }
+    private static readonly Color ErasePreviewColor = new Color(1f, 0.25f, 0.2f, 0.35f);
 
-    private GameObject _platformPrefab;
-    private GameObject _wallPrefab;
+    private readonly GameObject[] _brushPrefabs = new GameObject[FezBlockMapBrushCatalog.PlaceBrushes.Length];
+    private readonly string[] _brushPopupNames;
+
     private Transform _mapRoot;
-    private BrushKind _brush = BrushKind.Platform;
+    private int _brushIndex; // PlaceBrushes index；Erase 時為 -1
+    private bool _eraseMode;
     private bool _paintEnabled;
     private bool _replaceExisting = true;
     private bool _dragPaint = true;
@@ -36,11 +31,20 @@ public sealed class FezBlockMapEditorWindow : EditorWindow
     private double _lastPaintTime;
     private int _lastErasedInstanceId;
 
+    public FezBlockMapEditorWindow()
+    {
+        var brushes = FezBlockMapBrushCatalog.PlaceBrushes;
+        _brushPopupNames = new string[brushes.Length + 1];
+        for (var i = 0; i < brushes.Length; i++)
+            _brushPopupNames[i] = brushes[i].DisplayName;
+        _brushPopupNames[brushes.Length] = "清除";
+    }
+
     [MenuItem("Lichronicle/Map/Block Map Editor")]
     public static void Open()
     {
         var win = GetWindow<FezBlockMapEditorWindow>("Block Map");
-        win.minSize = new Vector2(320, 320);
+        win.minSize = new Vector2(320, 360);
         win.Show();
     }
 
@@ -67,12 +71,27 @@ public sealed class FezBlockMapEditorWindow : EditorWindow
             "• Shift＋左鍵：清除游標格（格點模式）\n" +
             "• Alt＋滑鼠：照常旋轉視角\n" +
             "• 左鍵按住拖曳：每 0.2 秒放置一格\n" +
-            "• 判定以模型為準，不吃隱形碰撞箱\n" +
-            "在 GridProjectionTest：方塊畫在 FezMapRoot 底下再 Play，會改走格子投影。平台是地形，牆筆刷是遮片，人會繞到牆的淺側，不會穿過去。SampleScene 不受影響。",
+            "平台＝地形；遮片牆＝繞到淺側；邊界牆＝當前視角看得見才硬擋。\n" +
+            "新方塊：在 FezBlockMapBrushCatalog.PlaceBrushes 加一筆即可。",
             MessageType.Info);
 
         _paintEnabled = EditorGUILayout.ToggleLeft("繪製模式（Scene 可繪）", _paintEnabled);
-        _brush = (BrushKind)EditorGUILayout.EnumPopup("筆刷", _brush);
+
+        var popupIndex = _eraseMode ? _brushPopupNames.Length - 1 : Mathf.Clamp(_brushIndex, 0, FezBlockMapBrushCatalog.PlaceBrushes.Length - 1);
+        var nextPopup = EditorGUILayout.Popup("筆刷", popupIndex, _brushPopupNames);
+        if (nextPopup != popupIndex)
+        {
+            if (nextPopup >= FezBlockMapBrushCatalog.PlaceBrushes.Length)
+            {
+                _eraseMode = true;
+            }
+            else
+            {
+                _eraseMode = false;
+                _brushIndex = nextPopup;
+            }
+        }
+
         _replaceExisting = EditorGUILayout.ToggleLeft("同格已有方塊則取代", _replaceExisting);
         _dragPaint = EditorGUILayout.ToggleLeft("右鍵拖曳連續刪除", _dragPaint);
 
@@ -82,8 +101,16 @@ public sealed class FezBlockMapEditorWindow : EditorWindow
             EnsureMapRoot();
 
         EditorGUILayout.Space(6);
-        _platformPrefab = (GameObject)EditorGUILayout.ObjectField("平台 Prefab（黃／紅）", _platformPrefab, typeof(GameObject), false);
-        _wallPrefab = (GameObject)EditorGUILayout.ObjectField("牆 Prefab（橘／紫）", _wallPrefab, typeof(GameObject), false);
+        EditorGUILayout.LabelField("筆刷 Prefab", EditorStyles.boldLabel);
+        var brushes = FezBlockMapBrushCatalog.PlaceBrushes;
+        for (var i = 0; i < brushes.Length; i++)
+        {
+            _brushPrefabs[i] = (GameObject)EditorGUILayout.ObjectField(
+                brushes[i].FieldLabel,
+                _brushPrefabs[i],
+                typeof(GameObject),
+                false);
+        }
 
         if (GUILayout.Button("載入預設 TestBlocks Prefab"))
             LoadDefaultPrefabs();
@@ -97,7 +124,7 @@ public sealed class FezBlockMapEditorWindow : EditorWindow
         }
 
         EditorGUILayout.Space(8);
-        if (GUILayout.Button("將地圖根下所有子物件 Snap 到 1m 格"))
+        if (GUILayout.Button("將地圖根下的格子座標寫入方塊"))
             SnapMapRootChildren();
 
         if (GUI.changed)
@@ -122,66 +149,66 @@ public sealed class FezBlockMapEditorWindow : EditorWindow
 
         UpdateHoverCell(e);
 
-        if (_hoverCell.HasValue && (e.type == EventType.Repaint || e.type == EventType.Layout))
-            DrawCellPreview(_hoverCell.Value);
-
-        // 中鍵：吸取射線打到的方塊種類
-        if (e.button == 2 && e.type == EventType.MouseDown)
+        // 中鍵：吸取筆刷
+        if (e.type == EventType.MouseDown && e.button == 2)
         {
-            var controlId = GUIUtility.GetControlID(FocusType.Passive);
-            HandleUtility.AddDefaultControl(controlId);
             if (TryPickBrushFromRaycast(e.mousePosition))
+            {
                 e.Use();
+                sceneView.Repaint();
+                Repaint();
+            }
+
             return;
         }
 
-        // 右鍵：射線打到的方塊刪除（與放置格點邏輯分離）
-        if (e.button == 1 && (e.type == EventType.MouseDown || (_dragPaint && e.type == EventType.MouseDrag)))
+        // 右鍵：刪除可見方塊
+        if ((e.type == EventType.MouseDown || (_dragPaint && e.type == EventType.MouseDrag)) && e.button == 1)
         {
-            var controlId = GUIUtility.GetControlID(FocusType.Passive);
-            HandleUtility.AddDefaultControl(controlId);
-
-            if (TryEraseByRaycast(e.mousePosition, force: e.type == EventType.MouseDown))
+            if (TryEraseByRaycast(e.mousePosition, e.type == EventType.MouseDown))
+            {
                 e.Use();
+                sceneView.Repaint();
+            }
+
             return;
         }
 
-        // 左鍵：點下放一格；按住拖曳則每 0.2 秒放一格
-        if (e.button == 0 && (e.type == EventType.MouseDown || e.type == EventType.MouseDrag))
+        if (e.type == EventType.MouseUp)
         {
-            var controlId = GUIUtility.GetControlID(FocusType.Passive);
-            HandleUtility.AddDefaultControl(controlId);
+            _lastPaintCell = null;
+            _lastErasedInstanceId = 0;
+        }
 
+        if ((e.type == EventType.MouseDown || e.type == EventType.MouseDrag) && e.button == 0)
+        {
             if (!_hoverCell.HasValue)
                 return;
 
-            var erase = e.shift || _brush == BrushKind.Erase;
-            var kind = erase ? BrushKind.Erase : _brush;
-
-            if (e.type == EventType.MouseDown)
+            var erase = e.shift || _eraseMode;
+            if (erase)
             {
-                TryPaint(_hoverCell.Value, kind, force: true);
-                e.Use();
-            }
-            else if (e.type == EventType.MouseDrag)
-            {
-                if (TryPaint(_hoverCell.Value, kind, force: false))
+                if (TryPaint(_hoverCell.Value, erase: true, force: e.type == EventType.MouseDown))
+                {
                     e.Use();
+                    sceneView.Repaint();
+                }
+            }
+            else if (TryPaint(_hoverCell.Value, erase: false, force: e.type == EventType.MouseDown))
+            {
+                e.Use();
+                sceneView.Repaint();
             }
         }
 
-        if (e.type == EventType.MouseUp && (e.button == 0 || e.button == 1))
-        {
-            _lastPaintCell = null;
-            _lastPaintTime = 0;
-            _lastErasedInstanceId = 0;
-        }
+        if (_hoverCell.HasValue && e.type == EventType.Repaint)
+            DrawCellPreview(_hoverCell.Value);
 
         if (e.type == EventType.MouseMove)
             sceneView.Repaint();
     }
 
-    private bool TryPaint(Vector3Int cell, BrushKind brush, bool force)
+    private bool TryPaint(Vector3Int cell, bool erase, bool force)
     {
         if (!force)
         {
@@ -192,15 +219,12 @@ public sealed class FezBlockMapEditorWindow : EditorWindow
                 return false;
         }
 
-        PaintAt(cell, brush);
+        PaintAt(cell, erase);
         _lastPaintCell = cell;
         _lastPaintTime = EditorApplication.timeSinceStartup;
         return true;
     }
 
-    /// <summary>
-    /// 右鍵刪除：以 Scene 可見模型挑選（非物理碰撞），再解析成地圖方塊根物件。
-    /// </summary>
     private bool TryEraseByRaycast(Vector2 guiPoint, bool force)
     {
         EnsureMapRoot();
@@ -226,9 +250,6 @@ public sealed class FezBlockMapEditorWindow : EditorWindow
         return true;
     }
 
-    /// <summary>
-    /// Scene 視圖可見物件挑選（忽略純碰撞／隱形碰撞箱）。
-    /// </summary>
     private bool TryPickVisibleBlock(Vector2 guiPoint, out GameObject block)
     {
         block = null;
@@ -265,7 +286,6 @@ public sealed class FezBlockMapEditorWindow : EditorWindow
             t = t.parent;
         }
 
-        // 若不在 MapRoot 下，但命中的是平台／牆 Prefab 實例，仍允許刪除其最外層根源
         var prefabRoot = PrefabUtility.GetNearestPrefabInstanceRoot(go);
         if (prefabRoot != null && IsKnownBlockPrefab(prefabRoot))
             return prefabRoot;
@@ -282,14 +302,17 @@ public sealed class FezBlockMapEditorWindow : EditorWindow
         if (source == null)
             return false;
 
-        return source == _platformPrefab || source == _wallPrefab
-            || source.name.IndexOf("Block", System.StringComparison.OrdinalIgnoreCase) >= 0
-            || source.name.IndexOf("Wall", System.StringComparison.OrdinalIgnoreCase) >= 0;
+        for (var i = 0; i < _brushPrefabs.Length; i++)
+        {
+            if (_brushPrefabs[i] != null && source == _brushPrefabs[i])
+                return true;
+        }
+
+        return source.name.IndexOf("Block", System.StringComparison.OrdinalIgnoreCase) >= 0
+            || source.name.IndexOf("Wall", System.StringComparison.OrdinalIgnoreCase) >= 0
+            || source.name.IndexOf("Boundary", System.StringComparison.OrdinalIgnoreCase) >= 0;
     }
 
-    /// <summary>
-    /// 中鍵吸取：可見模型命中平台／牆時，切換筆刷與對應 Prefab。
-    /// </summary>
     private bool TryPickBrushFromRaycast(Vector2 guiPoint)
     {
         if (!TryPickVisibleBlock(guiPoint, out var block))
@@ -299,45 +322,16 @@ public sealed class FezBlockMapEditorWindow : EditorWindow
         if (source == null)
             source = block;
 
-        if (IsWallLike(source, block))
-        {
-            _brush = BrushKind.Wall;
-            _wallPrefab = source;
-            Debug.Log($"[FezBlockMap] 筆刷切換為牆：{source.name}");
-        }
-        else
-        {
-            _brush = BrushKind.Platform;
-            _platformPrefab = source;
-            Debug.Log($"[FezBlockMap] 筆刷切換為平台：{source.name}");
-        }
+        var index = FezBlockMapBrushCatalog.FindMatchingBrushIndex(source, block);
+        _eraseMode = false;
+        _brushIndex = index;
+        if (index >= 0 && index < _brushPrefabs.Length && source != null)
+            _brushPrefabs[index] = source;
 
+        Debug.Log($"[FezBlockMap] 筆刷切換為 {FezBlockMapBrushCatalog.PlaceBrushes[index].DisplayName}：{source.name}");
         SavePrefs();
         Repaint();
         return true;
-    }
-
-    private static bool IsWallLike(GameObject source, GameObject instance)
-    {
-        if (source != null)
-        {
-            if (source.GetComponent<FezBackgroundWall>() != null
-                || source.GetComponentInChildren<FezBackgroundWall>(true) != null)
-                return true;
-            if (source.name.IndexOf("Wall", System.StringComparison.OrdinalIgnoreCase) >= 0)
-                return true;
-        }
-
-        if (instance != null)
-        {
-            if (instance.GetComponent<FezBackgroundWall>() != null
-                || instance.GetComponentInChildren<FezBackgroundWall>(true) != null)
-                return true;
-            if (instance.name.IndexOf("Wall", System.StringComparison.OrdinalIgnoreCase) >= 0)
-                return true;
-        }
-
-        return false;
     }
 
     private void UpdateHoverCell(Event e)
@@ -349,7 +343,6 @@ public sealed class FezBlockMapEditorWindow : EditorWindow
             && e.type != EventType.Layout)
             return;
 
-        // 以 Scene 可見表面為準（PlaceObject），避開隱形碰撞箱
         if (HandleUtility.PlaceObject(e.mousePosition, out var point, out var normal))
         {
             _hoverCell = WorldToCell(point + normal * 0.01f);
@@ -385,37 +378,47 @@ public sealed class FezBlockMapEditorWindow : EditorWindow
         var center = CellToWorld(cell) + Vector3.one * (GridSize * 0.5f);
         var size = Vector3.one * GridSize;
         Handles.zTest = UnityEngine.Rendering.CompareFunction.LessEqual;
-        Handles.color = _brush == BrushKind.Erase
-            ? new Color(1f, 0.25f, 0.2f, 0.35f)
-            : _brush == BrushKind.Wall
-                ? new Color(1f, 0.55f, 0.15f, 0.35f)
-                : new Color(0.3f, 0.85f, 0.35f, 0.35f);
+
+        Color preview;
+        if (_eraseMode)
+            preview = ErasePreviewColor;
+        else
+        {
+            var brushes = FezBlockMapBrushCatalog.PlaceBrushes;
+            var i = Mathf.Clamp(_brushIndex, 0, brushes.Length - 1);
+            preview = brushes[i].PreviewColor;
+        }
+
+        Handles.color = preview;
         Handles.DrawWireCube(center, size);
-        Handles.color = new Color(Handles.color.r, Handles.color.g, Handles.color.b, 0.12f);
+        Handles.color = new Color(preview.r, preview.g, preview.b, 0.12f);
         Handles.CubeHandleCap(0, center, Quaternion.identity, GridSize, EventType.Repaint);
     }
 
-    private void PaintAt(Vector3Int cell, BrushKind brush)
+    private void PaintAt(Vector3Int cell, bool erase)
     {
         EnsureMapRoot();
         if (_mapRoot == null)
             return;
 
         var existing = FindBlockAtCell(cell);
-        if (brush == BrushKind.Erase)
+        if (erase)
         {
             if (existing != null)
             {
                 Undo.DestroyObjectImmediate(existing);
                 EditorUtility.SetDirty(_mapRoot);
             }
+
             return;
         }
 
-        var prefab = brush == BrushKind.Wall ? _wallPrefab : _platformPrefab;
+        var brushes = FezBlockMapBrushCatalog.PlaceBrushes;
+        var index = Mathf.Clamp(_brushIndex, 0, brushes.Length - 1);
+        var prefab = _brushPrefabs[index];
         if (prefab == null)
         {
-            Debug.LogWarning("[FezBlockMap] 尚未指定對應 Prefab。");
+            Debug.LogWarning($"[FezBlockMap] 尚未指定「{brushes[index].DisplayName}」Prefab。");
             return;
         }
 
@@ -434,6 +437,7 @@ public sealed class FezBlockMapEditorWindow : EditorWindow
         instance.transform.position = CellToWorld(cell);
         instance.transform.rotation = Quaternion.identity;
         instance.name = $"{prefab.name}_{cell.x}_{cell.y}_{cell.z}";
+        FezGridCellAuthoring.WriteCell(instance, cell);
         EditorUtility.SetDirty(_mapRoot);
     }
 
@@ -448,6 +452,8 @@ public sealed class FezBlockMapEditorWindow : EditorWindow
             var child = _mapRoot.GetChild(i);
             if (child == null)
                 continue;
+            if (FezGridMap.TryReadStoredCell(child, out var stored) && stored == cell)
+                return child.gameObject;
             if ((child.position - target).sqrMagnitude < 0.01f)
                 return child.gameObject;
         }
@@ -483,30 +489,23 @@ public sealed class FezBlockMapEditorWindow : EditorWindow
         for (var i = 0; i < _mapRoot.childCount; i++)
             transforms.Add(_mapRoot.GetChild(i));
 
-        Undo.RecordObjects(transforms.ToArray(), "Snap Map Root To Grid");
-        for (var i = 0; i < transforms.Count; i++)
-        {
-            var t = transforms[i];
-            if (t == null)
-                continue;
-            var cell = WorldToCell(t.position + Vector3.one * 0.001f);
-            var snapped = CellToWorld(cell);
-            if ((snapped - t.position).sqrMagnitude < 1e-8f)
-                continue;
-            t.position = snapped;
-            EditorUtility.SetDirty(t);
-            count++;
-        }
-
-        Debug.Log($"[FezBlockMap] 已對齊地圖根下 {count} 個物件。");
+        count = FezGridCellAuthoring.WriteMapRoot(transforms, "Snap Map Root To Grid");
+        Debug.Log($"[FezBlockMap] 已把地圖根下 {count} 個方塊的格子寫入方塊。");
     }
 
     private void LoadDefaultPrefabs()
     {
-        _platformPrefab = LoadPrefabByGuid(DefaultPlatformGuid);
-        _wallPrefab = LoadPrefabByGuid(DefaultWallGuid);
-        if (_platformPrefab == null || _wallPrefab == null)
-            Debug.LogWarning("[FezBlockMap] 找不到預設 TestBlocks Prefab，請手動指定。");
+        var brushes = FezBlockMapBrushCatalog.PlaceBrushes;
+        var missing = false;
+        for (var i = 0; i < brushes.Length; i++)
+        {
+            _brushPrefabs[i] = LoadPrefabByGuid(brushes[i].DefaultPrefabGuid);
+            if (_brushPrefabs[i] == null)
+                missing = true;
+        }
+
+        if (missing)
+            Debug.LogWarning("[FezBlockMap] 部分預設 TestBlocks Prefab 找不到，請手動指定。");
     }
 
     private static GameObject LoadPrefabByGuid(string guid)
@@ -519,12 +518,31 @@ public sealed class FezBlockMapEditorWindow : EditorWindow
 
     private void LoadPrefs()
     {
-        _platformPrefab = LoadPrefabByGuid(EditorPrefs.GetString(PrefPlatformKey, DefaultPlatformGuid));
-        _wallPrefab = LoadPrefabByGuid(EditorPrefs.GetString(PrefWallKey, DefaultWallGuid));
-        if (_platformPrefab == null || _wallPrefab == null)
+        var brushes = FezBlockMapBrushCatalog.PlaceBrushes;
+        var anyMissing = false;
+        for (var i = 0; i < brushes.Length; i++)
+        {
+            var guid = EditorPrefs.GetString(brushes[i].PrefKey, brushes[i].DefaultPrefabGuid);
+            _brushPrefabs[i] = LoadPrefabByGuid(guid);
+            if (_brushPrefabs[i] == null)
+                anyMissing = true;
+        }
+
+        if (anyMissing)
             LoadDefaultPrefabs();
 
         _dragPaint = EditorPrefs.GetBool(PrefDragKey, true);
+        var brushId = EditorPrefs.GetString(PrefBrushKey, "platform");
+        if (brushId == FezBlockMapBrushCatalog.EraseId)
+        {
+            _eraseMode = true;
+            _brushIndex = 0;
+        }
+        else
+        {
+            _eraseMode = false;
+            _brushIndex = FezBlockMapBrushCatalog.IndexOfId(brushId);
+        }
 
         var rootId = EditorPrefs.GetInt(PrefRootKey, 0);
         if (rootId != 0)
@@ -537,23 +555,23 @@ public sealed class FezBlockMapEditorWindow : EditorWindow
 
     private void SavePrefs()
     {
-        if (_platformPrefab != null)
+        var brushes = FezBlockMapBrushCatalog.PlaceBrushes;
+        for (var i = 0; i < brushes.Length; i++)
         {
-            var path = AssetDatabase.GetAssetPath(_platformPrefab);
+            if (_brushPrefabs[i] == null)
+                continue;
+            var path = AssetDatabase.GetAssetPath(_brushPrefabs[i]);
             var guid = AssetDatabase.AssetPathToGUID(path);
             if (!string.IsNullOrEmpty(guid))
-                EditorPrefs.SetString(PrefPlatformKey, guid);
-        }
-
-        if (_wallPrefab != null)
-        {
-            var path = AssetDatabase.GetAssetPath(_wallPrefab);
-            var guid = AssetDatabase.AssetPathToGUID(path);
-            if (!string.IsNullOrEmpty(guid))
-                EditorPrefs.SetString(PrefWallKey, guid);
+                EditorPrefs.SetString(brushes[i].PrefKey, guid);
         }
 
         EditorPrefs.SetBool(PrefDragKey, _dragPaint);
+        EditorPrefs.SetString(
+            PrefBrushKey,
+            _eraseMode
+                ? FezBlockMapBrushCatalog.EraseId
+                : brushes[Mathf.Clamp(_brushIndex, 0, brushes.Length - 1)].Id);
         EditorPrefs.SetInt(PrefRootKey, _mapRoot != null ? _mapRoot.GetInstanceID() : 0);
     }
 }

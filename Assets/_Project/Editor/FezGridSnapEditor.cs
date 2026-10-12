@@ -34,12 +34,22 @@ public static class FezGridSnapEditor
                 SnapAxis(p.y),
                 SnapAxis(p.z));
 
-            if ((target - p).sqrMagnitude < 1e-8f)
-                continue;
+            var moved = (target - p).sqrMagnitude >= 1e-8f;
+            if (moved)
+            {
+                t.position = target;
+                EditorUtility.SetDirty(t);
+                snapped++;
+            }
 
-            t.position = target;
-            EditorUtility.SetDirty(t);
-            snapped++;
+            if (t.GetComponent<FezGridBlock>() != null || (t.parent != null && t.parent.name == "FezMapRoot"))
+            {
+                var cell = new Vector3Int(
+                    Mathf.RoundToInt(target.x),
+                    Mathf.RoundToInt(target.y),
+                    Mathf.RoundToInt(target.z));
+                FezGridCellAuthoring.WriteCell(t.gameObject, cell);
+            }
         }
 
         Debug.Log($"[FezGridSnap] 已對齊 {snapped}/{transforms.Length} 個物件到 {GridSize}m 網格。");

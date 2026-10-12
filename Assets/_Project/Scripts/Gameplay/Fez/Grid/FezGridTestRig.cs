@@ -28,6 +28,8 @@ public sealed class FezGridTestRig : MonoBehaviour
             BuildDemo(map);
 
         ResolveSpawn(map, out var spawn, out var spawnRot);
+        if (imported > 0)
+            EnsureTestBoundaryWalls(map, spawn);
 
         var shellObject = new GameObject("GridShell");
         var shell = shellObject.AddComponent<FezGridShell>();
@@ -218,10 +220,62 @@ public sealed class FezGridTestRig : MonoBehaviour
 
         for (var z = 6; z <= 10; z++)
             Add(map, 7, 1, z, cyan);
+
+        // 邊界牆測試：預設視角（-Z）下 (2,y,-1) 為最淺 → 硬擋；轉 90° 後可穿。
+        var boundary = new Color(0.9f, 0.25f, 0.45f);
+        AddBoundary(map, 2, 0, -1, boundary);
+        AddBoundary(map, 2, 1, -1, boundary);
+        AddBoundary(map, 3, 0, -1, boundary);
+    }
+
+    /// <summary>
+    /// 場景地圖若尚未有邊界牆，在 spawn 附近補一排供 Play 驗證。
+    /// </summary>
+    private static void EnsureTestBoundaryWalls(FezGridMap map, Vector3 spawn)
+    {
+        if (map == null)
+            return;
+
+        foreach (var block in map.Blocks)
+        {
+            if (block != null && block.IsBoundaryWall)
+                return;
+        }
+
+        var ox = Mathf.RoundToInt(spawn.x);
+        var oy = Mathf.Max(0, Mathf.FloorToInt(spawn.y - 0.05f));
+        var oz = Mathf.RoundToInt(spawn.z);
+        var boundary = new Color(0.9f, 0.25f, 0.45f);
+
+        // 預設視角深度 -Z：放在 spawn 前方（較小 z）一排，面對時硬擋。
+        TryAddBoundary(map, ox + 1, oy, oz - 2, boundary);
+        TryAddBoundary(map, ox + 1, oy + 1, oz - 2, boundary);
+        TryAddBoundary(map, ox + 2, oy, oz - 2, boundary);
+    }
+
+    private static void TryAddBoundary(FezGridMap map, int x, int y, int z, Color color)
+    {
+        var cell = new Vector3Int(x, y, z);
+        if (map.HasSolid(cell))
+            return;
+
+        // HasSolid 只查平台；空格或非平台才 Add（AddBlock 遇已佔格會直接回傳舊塊）。
+        foreach (var block in map.Blocks)
+        {
+            if (block != null && block.Cell == cell)
+                return;
+        }
+
+        AddBoundary(map, x, y, z, color);
     }
 
     private static void Add(FezGridMap map, int x, int y, int z, Color color, bool solid = true)
     {
         map.AddBlock(new Vector3Int(x, y, z), color, solid);
+    }
+
+    private static void AddBoundary(FezGridMap map, int x, int y, int z, Color color)
+    {
+        map.AddBlock(new Vector3Int(x, y, z), color, FezGridBlockKind.BoundaryWall);
     }
 }
