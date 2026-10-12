@@ -90,6 +90,7 @@ public sealed class FezGridTestRig : MonoBehaviour
         controller.radius = 0.28f;
         controller.center = new Vector3(0f, 0.8f, 0f);
         controller.skinWidth = 0.05f;
+        controller.stepOffset = 0f;
         var player = playerObject.AddComponent<FezGridTestPlayer>();
 
         var body = GameObject.CreatePrimitive(PrimitiveType.Capsule);

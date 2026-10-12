@@ -85,6 +85,8 @@ public sealed class FezGridTestPlayer : MonoBehaviour
     private void Awake()
     {
         _cc = GetComponent<CharacterController>();
+        // 高度只由地板決定。轉視角後碰撞體重擺時，上台階會把人頂起來。
+        _cc.stepOffset = 0f;
     }
 
     private void LateUpdate()
@@ -297,9 +299,25 @@ public sealed class FezGridTestPlayer : MonoBehaviour
             motion.y = 0f;
         }
 
+        var yBefore = transform.position.y;
         var flags = _cc.Move(motion * Time.deltaTime);
         if ((flags & CollisionFlags.Above) != 0 && _velocity.y > 0f)
             _velocity.y = 0f;
+        // 沒有在跳時，不讓碰撞把腳抬過目前站的地板。
+        if (_velocity.y <= 0.01f && transform.position.y > yBefore + 0.001f)
+        {
+            var limit = yBefore;
+            if (support != null && support.Solid)
+                limit = Mathf.Max(yBefore, support.TopY);
+            if (transform.position.y > limit + 0.001f)
+            {
+                var pinned = transform.position;
+                pinned.y = limit;
+                _cc.enabled = false;
+                transform.position = pinned;
+                _cc.enabled = true;
+            }
+        }
 
         if (lockFeet)
         {
